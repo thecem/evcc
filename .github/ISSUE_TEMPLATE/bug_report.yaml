@@ -30,6 +30,16 @@ body:
       label: Steps to reproduce
       description: >-
         Steps to reproduce the behavior.
+        
+  - type: textarea
+    validations:
+      required: true
+    attributes:
+      label: Hassio-Addon config details
+      render: text
+      description: >
+        Show hassio-addon configuration in home assistant addon configuration
+  
 
   - type: textarea
     validations:
