@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/util"
 	"github.com/evcc-io/evcc/util/oauth"
@@ -65,7 +66,6 @@ func NewIdentity(log *util.Logger, config Config) *Identity {
 }
 
 func (v *Identity) getDeviceID() (string, error) {
-	// stamp, err := Stamps[v.config.CCSPApplicationID].Get()
 	stamp, err := v.stamp()
 	if err != nil {
 		return "", err
@@ -143,7 +143,7 @@ func (v *Identity) setLanguage(cookieClient *request.Helper, language string) er
 	return err
 }
 
-func (v *Identity) brandLogin(cookieClient *request.Helper, user, password string) (string, error) {
+func (v *Identity) brandLoginHyundaiEU(cookieClient *request.Helper, user, password string) (string, error) {
 	req, err := request.New(http.MethodGet, v.config.URI+IntegrationInfoURL, nil, request.JSONEncoding)
 
 	var info struct {
@@ -155,24 +155,24 @@ func (v *Identity) brandLogin(cookieClient *request.Helper, user, password strin
 		err = cookieClient.DoJSON(req, &info)
 	}
 
+	var action string
 	var resp *http.Response
 
-	// get the connector_session_key
-	var connectorSessionKey string
 	if err == nil {
-		uri := fmt.Sprintf(v.config.BrandAuthUrl, v.config.LoginFormHost, v.config.AuthClientID, v.config.URI, "en")
+		uri := fmt.Sprintf(v.config.BrandAuthUrl, v.config.AuthClientID, v.config.URI, "en", info.ServiceId, info.UserId)
+
 		req, err = request.New(http.MethodGet, uri, nil)
 		if err == nil {
 			if resp, err = cookieClient.Do(req); err == nil {
 				defer resp.Body.Close()
-				// code adapted from hyundai_kia_connect_api
-				// get redirect URL from request
-				err = errors.New("connector session key not found")
-				urlRedirect := resp.Request.URL.Query()
-				// extract redirect URL
-				if nextUri := urlRedirect.Get("next_uri"); nextUri != "" {
-					if nextVal, ok := url.Parse(nextUri); ok == nil {
-						if connectorSessionKey := nextVal.Query().Get("connector_session_key"); connectorSessionKey != "" {
+
+				var doc *goquery.Document
+				if doc, err = goquery.NewDocumentFromReader(resp.Body); err == nil {
+					err = errors.New("form not found")
+
+					if form := doc.Find("form"); form != nil && form.Length() == 1 {
+						var ok bool
+						if action, ok = form.Attr("action"); ok {
 							err = nil
 						}
 					}
@@ -181,44 +181,63 @@ func (v *Identity) brandLogin(cookieClient *request.Helper, user, password strin
 		}
 	}
 
-	// if we have the connectorSessionKey, go on and find the login code
+	if err == nil {
+		data := url.Values{
+			"username":     {user},
+			"password":     {password},
+			"credentialId": {""},
+			"rememberMe":   {"on"},
+		}
+
+		req, err = request.New(http.MethodPost, action, strings.NewReader(data.Encode()), request.URLEncoding)
+		if err == nil {
+			cookieClient.CheckRedirect = request.DontFollow
+			if resp, err = cookieClient.Do(req); err == nil {
+				defer resp.Body.Close()
+
+				// need 302
+				if resp.StatusCode != http.StatusFound {
+					err = errors.New("missing redirect")
+
+					if doc, err2 := goquery.NewDocumentFromReader(resp.Body); err2 == nil {
+						if span := doc.Find("span[class=kc-feedback-text]"); span != nil && span.Length() == 1 {
+							err = errors.New(span.Text())
+						}
+					}
+				}
+			}
+
+			cookieClient.CheckRedirect = nil
+		}
+	}
+
+	if err == nil {
+		resp, err = cookieClient.Get(resp.Header.Get("Location"))
+		if err == nil {
+			defer resp.Body.Close()
+		}
+	}
+
 	var code string
 	if err == nil {
-		// build new request uri
-		uri := fmt.Sprintf("%s%s", v.config.LoginFormHost, "/auth/account/signin")
-		data := url.Values{
-			"client_id":             {v.config.CCSPServiceID},
-			"encryptedPassword":     {"false"},
-			"orgHmgSid":             {""},
-			"password":              {password},
-			"redirect_uri":          {v.config.URI + "/api/v1/user/oauth2/redirect"},
-			"state":                 {"ccsp"},
-			"username":              {user},
-			"remember_me":           {"false"},
-			"connector_session_key": {connectorSessionKey},
-			"_csrf":                 {""},
+		data := map[string]string{
+			"intUserId": "",
 		}
 
-		// create a client that doesn't honor redirects so we receive the original response
-		// no idea how to do that with the internal request.New(...) function
-		sc := http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-
-		req, err = http.NewRequest(http.MethodPost, uri, strings.NewReader(data.Encode()))
+		req, err = request.New(http.MethodPost, v.config.URI+SilentSigninURL, request.MarshalJSON(data), request.JSONEncoding)
 		if err == nil {
-			req.PostForm = data
-			req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-			req.Header.Add("Origin", v.config.LoginFormHost)
+			req.Header.Set("ccsp-service-id", v.config.CCSPServiceID)
+			cookieClient.CheckRedirect = request.DontFollow
 
-			if resp, err = sc.Do(req); err == nil {
-				location := resp.Header.Get("Location")
-				err = errors.New("code location not found")
-				if locationUrl, ok := url.Parse(location); ok == nil {
-					if code = locationUrl.Query().Get("code"); code != "" {
-						err = nil
+			var res struct {
+				RedirectUrl string `json:"redirectUrl"`
+			}
+
+			if err = cookieClient.DoJSON(req, &res); err == nil {
+				var uri *url.URL
+				if uri, err = url.Parse(res.RedirectUrl); err == nil {
+					if code = uri.Query().Get("code"); len(code) == 0 {
+						err = errors.New("code not found")
 					}
 				}
 			}
@@ -226,6 +245,99 @@ func (v *Identity) brandLogin(cookieClient *request.Helper, user, password strin
 	}
 
 	return code, err
+}
+
+func (v *Identity) brandLoginKiaEU(cookieClient *request.Helper, user, password string) (string, error) {
+	req, _ := request.New(http.MethodGet, v.config.URI+IntegrationInfoURL, nil, request.JSONEncoding)
+
+	var info struct {
+		UserId    string `json:"userId"`
+		ServiceId string `json:"serviceId"`
+	}
+
+	if err := cookieClient.DoJSON(req, &info); err != nil {
+		return "", err
+	}
+
+	var resp *http.Response
+
+	// get the connector_session_key
+	uri := fmt.Sprintf(v.config.BrandAuthUrl, v.config.LoginFormHost, v.config.AuthClientID, v.config.URI, "en")
+	resp, err := cookieClient.Get(uri)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	// get redirect URL from request
+	nextUri := resp.Request.URL.Query().Get("next_uri")
+	if nextUri == "" {
+		return "", errors.New("empty redirect url on connector session key request")
+	}
+
+	nextVal, err := url.Parse(nextUri)
+	if err != nil {
+		return "", err
+	}
+
+	connectorSessionKey := nextVal.Query().Get("connector_session_key")
+	if connectorSessionKey == "" {
+		return "", errors.New("empty or non-existing connector session key")
+	}
+
+	// if we have the connectorSessionKey, go on and find the login code
+	// build new request uri
+	uri = fmt.Sprintf("%s%s", v.config.LoginFormHost, "/auth/account/signin")
+	data := url.Values{
+		"client_id":             {v.config.CCSPServiceID},
+		"encryptedPassword":     {"false"},
+		"orgHmgSid":             {""},
+		"password":              {password},
+		"redirect_uri":          {v.config.URI + "/api/v1/user/oauth2/redirect"},
+		"state":                 {"ccsp"},
+		"username":              {user},
+		"remember_me":           {"false"},
+		"connector_session_key": {connectorSessionKey},
+		"_csrf":                 {""},
+	}
+
+	// create a client that doesn't honor redirects so we receive the original response
+	// no idea how to do that with the internal request.New(...) function
+	sc := http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err = request.New(http.MethodPost, uri, strings.NewReader(data.Encode()), map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+		"Origin":       v.config.LoginFormHost,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	resp, err = sc.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return "", errors.New("missing location header")
+	}
+
+	locationUrl, err := url.Parse(location)
+	if err != nil {
+		return "", err
+	}
+
+	code := locationUrl.Query().Get("code")
+	if code == "" {
+		return "", errors.New("missing code")
+	}
+
+	return code, nil
 }
 
 func (v *Identity) bluelinkLogin(cookieClient *request.Helper, user, password string) (string, error) {
@@ -257,7 +369,28 @@ func (v *Identity) bluelinkLogin(cookieClient *request.Helper, user, password st
 	return accCode, err
 }
 
-func (v *Identity) exchangeCode(accCode string) (*oauth2.Token, error) {
+func (v *Identity) exchangeCodeHyundaiEU(accCode string) (*oauth2.Token, error) {
+	headers := map[string]string{
+		"Authorization": "Basic " + v.config.BasicToken,
+		"Content-type":  "application/x-www-form-urlencoded",
+		"User-Agent":    "okhttp/3.10.0",
+	}
+
+	data := url.Values{
+		"grant_type":   {"authorization_code"},
+		"redirect_uri": {v.config.URI + "/api/v1/user/oauth2/redirect"},
+		"code":         {accCode},
+	}
+
+	var token oauth2.Token
+
+	req, _ := request.New(http.MethodPost, v.config.URI+TokenURL, strings.NewReader(data.Encode()), headers)
+	err := v.DoJSON(req, &token)
+
+	return util.TokenWithExpiry(&token), err
+}
+
+func (v *Identity) exchangeCodeKiaEU(accCode string) (*oauth2.Token, error) {
 	uri := v.config.LoginFormHost + "/auth/api/v2/user/oauth2/token"
 	headers := map[string]string{
 		"Content-type": "application/x-www-form-urlencoded",
@@ -303,7 +436,7 @@ func (v *Identity) RefreshToken(token *oauth2.Token) (*oauth2.Token, error) {
 	return util.TokenWithExpiry(&res), err
 }
 
-func (v *Identity) Login(user, password, language string) (err error) {
+func (v *Identity) Login(user, password, language, brand string) (err error) {
 	if user == "" || password == "" {
 		return api.ErrMissingCredentials
 	}
@@ -320,16 +453,28 @@ func (v *Identity) Login(user, password, language string) (err error) {
 
 	var code string
 	if err == nil {
-		// try new login first, then fallback
-		if code, err = v.brandLogin(cookieClient, user, password); err != nil {
-			code, err = v.bluelinkLogin(cookieClient, user, password)
-		}
-	}
-
-	if err == nil {
-		var token *oauth2.Token
-		if token, err = v.exchangeCode(code); err == nil {
-			v.TokenSource = oauth.RefreshTokenSource(token, v)
+		switch brand {
+		case "kia":
+			code, err = v.brandLoginKiaEU(cookieClient, user, password)
+			if err == nil {
+				var token *oauth2.Token
+				if token, err = v.exchangeCodeKiaEU(code); err == nil {
+					v.TokenSource = oauth.RefreshTokenSource(token, v)
+				}
+			}
+		case "hyundai":
+			// try new login first, then fallback
+			if code, err = v.brandLoginHyundaiEU(cookieClient, user, password); err != nil {
+				code, err = v.bluelinkLogin(cookieClient, user, password)
+			}
+			if err == nil {
+				var token *oauth2.Token
+				if token, err = v.exchangeCodeHyundaiEU(code); err == nil {
+					v.TokenSource = oauth.RefreshTokenSource(token, v)
+				}
+			}
+		default:
+			err = fmt.Errorf("unknown brand (%s)", brand)
 		}
 	}
 
