@@ -1,0 +1,35 @@
+template: homeassistant-ws
+products:
+  - brand: Home Assistant
+    description:
+      generic: WebSocket API
+requirements:
+  evcc: ["skiptest"]
+group: generic
+params:
+  - name: usage
+    choice: ["grid", "pv", "battery"]
+  - name: uri
+    description:
+      generic: Home Assistant WebSocket URI
+    default: ws://homeassistant:8123/api/websocket
+  - name: token
+    description:
+      generic: Long-lived access token
+    required: true
+    mask: true
+  - name: entity
+    description:
+      generic: Entity ID
+    required: true
+  - name: scale
+    description:
+      generic: Scale factor
+    type: float
+    default: 1
+render: |
+  type: homeassistant-ws
+  uri: {{ .uri }}
+  token: {{ .token }}
+  entity: {{ .entity }}
+  scale: {{ .scale }}
