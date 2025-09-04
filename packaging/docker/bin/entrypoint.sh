@@ -55,8 +55,8 @@ if [ -f "${HASSIO_OPTIONSFILE}" ]; then
       exec env EVCC_DATABASE_DSN="${SQLITE_FILE}" evcc
     else
       # neither YAML nor database present
-      echo "No config file (evcc.yaml) and no database file configured. Please create a config under ${CONFIG} or migrate your settings to the database."
-      echo "For details see evcc documentation at https://github.com/evcc-io/evcc#readme."
+      echo "No config file (evcc.yaml) and no database (evcc.db) file configured. Please copy your database to ${SQLITE_FILE} or migrate your settings to the database or create a config under ${CONFIG}."
+      echo "For details see evcc Home Assistant documentation at https://docs.evcc.io/docs/installation/home-assistant"
       exit 1
     fi
   fi
