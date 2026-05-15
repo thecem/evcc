@@ -19,20 +19,23 @@ type Fnn3 struct {
 	root       api.Circuit
 	s1, s2, w3 func() (bool, error)
 
-	smartgridID uint
-	limit       *float64
-	maxPower    float64
-	interval    time.Duration
+	smartgridID    uint
+	smartgridDimID uint
+	limit          *float64
+	maxPower       float64
+	maxPowerDim    float64
+	interval       time.Duration
 }
 
 // NewFromConfig creates an Fnn3 HEMS from generic config
 func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*Fnn3, error) {
 	cc := struct {
-		MaxPower float64
-		W3       plugin.Config
-		S1       *plugin.Config
-		S2       *plugin.Config
-		Interval time.Duration
+		MaxPower    float64
+		MaxPowerDim float64
+		W3          plugin.Config
+		S1          *plugin.Config
+		S2          *plugin.Config
+		Interval    time.Duration
 	}{
 		Interval: 10 * time.Second,
 	}
@@ -65,19 +68,20 @@ func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*F
 		return nil, err
 	}
 
-	return NewFnn3(gridcontrol, s1G, s2G, w3G, cc.MaxPower, cc.Interval)
+	return NewFnn3(gridcontrol, s1G, s2G, w3G, cc.MaxPower, cc.MaxPowerDim, cc.Interval)
 }
 
 // NewFnn3 creates Fnn3 HEMS
-func NewFnn3(root api.Circuit, s1, s2, w3 func() (bool, error), maxPower float64, interval time.Duration) (*Fnn3, error) {
+func NewFnn3(root api.Circuit, s1, s2, w3 func() (bool, error), maxPower, maxPowerDim float64, interval time.Duration) (*Fnn3, error) {
 	c := &Fnn3{
-		log:      util.NewLogger("fnn3"),
-		root:     root,
-		maxPower: maxPower,
-		s1:       s1,
-		s2:       s2,
-		w3:       w3,
-		interval: interval,
+		log:         util.NewLogger("fnn3"),
+		root:        root,
+		maxPower:    maxPower,
+		maxPowerDim: maxPowerDim,
+		s1:          s1,
+		s2:          s2,
+		w3:          w3,
+		interval:    interval,
 	}
 
 	return c, nil
@@ -99,7 +103,7 @@ func (c *Fnn3) run() error {
 
 	if w3 {
 		// 0%
-		return c.curtail(0.0)
+		return c.apply(0.0)
 	}
 
 	if c.s2 != nil {
@@ -110,7 +114,7 @@ func (c *Fnn3) run() error {
 
 		if s2 {
 			// 30%
-			return c.curtail(0.3)
+			return c.apply(0.3)
 		}
 	}
 
@@ -122,12 +126,26 @@ func (c *Fnn3) run() error {
 
 		if s1 {
 			// 60%
-			return c.curtail(0.6)
+			return c.apply(0.6)
 		}
 	}
 
 	// 100%
-	return c.curtail(1.0)
+	return c.apply(1.0)
+}
+
+func (c *Fnn3) apply(frac float64) error {
+	if err := c.curtail(frac); err != nil {
+		return err
+	}
+
+	if c.maxPowerDim > 0 {
+		if err := c.dim(frac); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (c *Fnn3) curtail(frac float64) error {
@@ -146,6 +164,27 @@ func (c *Fnn3) curtail(frac float64) error {
 	// c.root.SetMaxPower(c.maxPower*frac)
 
 	if err := smartgrid.UpdateSession(&c.smartgridID, smartgrid.Curtail, c.root.GetChargePower(), c.maxPower*frac, active); err != nil {
+		c.log.ERROR.Printf("smartgrid session: %v", err)
+	}
+
+	return nil
+}
+
+func (c *Fnn3) dim(frac float64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	active := frac < 1.0
+
+	var limit float64
+	if active {
+		limit = c.maxPowerDim * frac
+	}
+
+	c.root.Dim(active)
+	c.root.SetMaxPower(limit)
+
+	if err := smartgrid.UpdateSession(&c.smartgridDimID, smartgrid.Dim, c.root.GetChargePower(), limit, active); err != nil {
 		c.log.ERROR.Printf("smartgrid session: %v", err)
 	}
 
