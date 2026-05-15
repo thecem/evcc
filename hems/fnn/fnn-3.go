@@ -139,6 +139,7 @@ func (c *Fnn3) apply(frac float64) error {
 		return err
 	}
 
+	// dim is optional; only active when maxPowerDim is configured
 	if c.maxPowerDim > 0 {
 		if err := c.dim(frac); err != nil {
 			return err
