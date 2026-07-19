@@ -1,6 +1,8 @@
 ## external limit via relay contact (binary on/off)
 type: relay
 maxpower: 4200 # total load limit while signal is active (W)
+failsafeconsumptionactivepowerlimit: 4200 # fallback limit if reading the input fails (W)
+#failsafedurationminimum: 30m # keep the failsafe limit active for at least this long
 limit: # input signal, plugin
   source: const
   value: false # 0/false = normal, 1/true = limit active

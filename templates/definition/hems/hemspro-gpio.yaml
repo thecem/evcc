@@ -24,14 +24,52 @@ params:
     help:
       en: Rated generator/module power (Wp) of the installation.
       de: Gesamtnennleistung bzw. Modul- oder Generatorleistung der Anlage (Bezugsgröße nach § 9 EEG).
+  - name: failsafeconsumptionpower
+    type: float
+    unit: W
+    advanced: true
+    description:
+      en: Failsafe consumption limit
+      de: Failsafe-Bezugsgrenze
+    help:
+      en: Consumption limit applied if reading W4 fails.
+      de: Bezugsgrenze, die angewendet wird, wenn W4 nicht gelesen werden kann.
+  - name: failsafeproductionpower
+    type: float
+    unit: W
+    advanced: true
+    description:
+      en: Failsafe production limit
+      de: Failsafe-Einspeisebegrenzung
+    help:
+      en: Feed-in limit applied if reading the curtailment inputs fails.
+      de: Einspeisebegrenzung, die angewendet wird, wenn die Curtailment-Eingänge nicht gelesen werden können.
+  - name: failsafeduration
+    type: duration
+    advanced: true
+    description:
+      en: Failsafe minimum duration
+      de: Failsafe-Mindestdauer
+    help:
+      en: Minimum time the failsafe limit stays active once entered.
+      de: Mindestdauer, für die der Failsafe-Wert nach Aktivierung gehalten wird.
 render: |
   type: fnn
   maxdimpower: {{ .maxconsumptionpower }}
+  {{- if .failsafeconsumptionpower }}
+  failsafeconsumptionactivepowerlimit: {{ .failsafeconsumptionpower }}
+  {{- end }}
   w4:
     source: gpio
     pin: 13
     function: read
   maxcurtailpower: {{ .maxproductionpower }}
+  {{- if .failsafeproductionpower }}
+  failsafeproductionactivepowerlimit: {{ .failsafeproductionpower }}
+  {{- end }}
+  {{- if .failsafeduration }}
+  failsafedurationminimum: {{ .failsafeduration }}
+  {{- end }}
   w3:
     source: gpio
     pin: 5

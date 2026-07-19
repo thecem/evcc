@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -32,15 +33,22 @@ type Relay struct {
 	limit       *float64
 	maxPower    float64
 	interval    time.Duration
+
+	failsafeConsumptionLimit float64
+	failsafeDurationMinimum  time.Duration
+	failsafeActive           bool
+	failsafeSince            time.Time
 }
 
 // NewFromConfig creates an Relay HEMS from generic config
 func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*Relay, error) {
 	cc := struct {
-		MaxPower    float64
-		Limit       plugin.Config
-		Passthrough *plugin.Config
-		Interval    time.Duration
+		MaxPower                            float64
+		Limit                               plugin.Config
+		Passthrough                         *plugin.Config
+		Interval                            time.Duration
+		FailsafeConsumptionActivePowerLimit float64
+		FailsafeDurationMinimum             time.Duration
 	}{
 		Interval: 10 * time.Second,
 	}
@@ -60,22 +68,35 @@ func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*R
 		return nil, err
 	}
 
-	return NewRelay(site, limitG, passthroughS, cc.MaxPower, cc.Interval)
+	return NewRelay(
+		site,
+		limitG,
+		passthroughS,
+		cc.MaxPower,
+		cc.Interval,
+		math.Abs(cc.FailsafeConsumptionActivePowerLimit),
+		cc.FailsafeDurationMinimum,
+	)
 }
 
 // NewRelay creates Relay HEMS
-func NewRelay(site site.API, w1 func() (bool, error), passthrough func(bool) error, maxPower float64, interval time.Duration) (*Relay, error) {
+func NewRelay(site site.API, w1 func() (bool, error), passthrough func(bool) error, maxPower float64, interval time.Duration, failsafeConsumptionLimit float64, failsafeDurationMinimum time.Duration) (*Relay, error) {
 	c := &Relay{
-		log:         util.NewLogger("relay"),
-		site:        site,
-		passthrough: passthrough,
-		maxPower:    maxPower,
-		w1:          w1,
-		interval:    interval,
+		log:                      util.NewLogger("relay"),
+		site:                     site,
+		passthrough:              passthrough,
+		maxPower:                 maxPower,
+		w1:                       w1,
+		interval:                 interval,
+		failsafeConsumptionLimit: failsafeConsumptionLimit,
+		failsafeDurationMinimum:  failsafeDurationMinimum,
 	}
 
 	if maxPower == 0 {
 		return nil, errors.New("missing power limit")
+	}
+	if failsafeDurationMinimum < 0 {
+		return nil, errors.New("failsafe duration cannot be negative")
 	}
 
 	// read the relay once synchronously so the limit is valid as soon as NewRelay returns
@@ -108,7 +129,33 @@ func (c *Relay) Run() {
 func (c *Relay) run() error {
 	active, err := c.w1()
 	if err != nil {
-		return err
+		if c.failsafeConsumptionLimit <= 0 {
+			return err
+		}
+		c.mu.Lock()
+		if !c.failsafeActive {
+			c.log.WARN.Printf("limit read error, entering failsafe mode: %v", err)
+			c.failsafeActive = true
+			c.failsafeSince = time.Now()
+		}
+		c.mu.Unlock()
+		return c.setConsumptionLimit(c.failsafeConsumptionLimit)
+	}
+
+	c.mu.Lock()
+	inFailsafe := false
+	if c.failsafeActive {
+		if time.Since(c.failsafeSince) >= c.failsafeDurationMinimum {
+			c.log.DEBUG.Println("leaving failsafe mode")
+			c.failsafeActive = false
+		} else {
+			inFailsafe = true
+		}
+	}
+	c.mu.Unlock()
+
+	if inFailsafe {
+		return nil
 	}
 
 	var limit float64
