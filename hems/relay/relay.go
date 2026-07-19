@@ -129,7 +129,7 @@ func (c *Relay) Run() {
 func (c *Relay) run() error {
 	active, err := c.w1()
 	if err != nil {
-		if c.failsafeConsumptionLimit <= 0 {
+		if !c.hasFailsafe() {
 			return err
 		}
 		c.mu.Lock()
@@ -172,6 +172,10 @@ func (c *Relay) run() error {
 	}
 
 	return nil
+}
+
+func (c *Relay) hasFailsafe() bool {
+	return c.failsafeConsumptionLimit > 0
 }
 
 func (c *Relay) setConsumptionLimit(limit float64) error {

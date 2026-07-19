@@ -12,11 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type stubSite struct {
+type testSiteStub struct {
 	site.API
 }
 
-func (s *stubSite) GetGridPower() float64 { return 0 }
+func (s *testSiteStub) GetGridPower() float64 { return 0 }
 
 func boolG(v bool) func() (bool, error) {
 	return func() (bool, error) { return v, nil }
@@ -51,7 +51,7 @@ func TestFailsafeActivatesOnReadError(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 
 	const failsafeLimit = 4200.0
-	c, err := NewRelay(&stubSite{}, boolG(false), nil, 1e3, 0, failsafeLimit, 0)
+	c, err := NewRelay(&testSiteStub{}, boolG(false), nil, 1e3, 0, failsafeLimit, 0)
 	require.NoError(t, err)
 	c.w1 = errG()
 	require.NoError(t, c.run())
@@ -65,7 +65,7 @@ func TestFailsafeExitsAfterDuration(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 
 	const failsafeLimit = 4200.0
-	c, err := NewRelay(&stubSite{}, boolG(false), nil, 1e3, 0, failsafeLimit, 0)
+	c, err := NewRelay(&testSiteStub{}, boolG(false), nil, 1e3, 0, failsafeLimit, 0)
 	require.NoError(t, err)
 	c.w1 = errG()
 	require.NoError(t, c.run())
@@ -83,7 +83,7 @@ func TestFailsafeRemainsActiveDuringDuration(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 
 	const failsafeLimit = 4200.0
-	c, err := NewRelay(&stubSite{}, boolG(false), nil, 1e3, 0, failsafeLimit, time.Hour)
+	c, err := NewRelay(&testSiteStub{}, boolG(false), nil, 1e3, 0, failsafeLimit, time.Hour)
 	require.NoError(t, err)
 	c.w1 = errG()
 	require.NoError(t, c.run())
@@ -100,7 +100,7 @@ func TestFailsafeRemainsActiveDuringDuration(t *testing.T) {
 func TestFailsafeNotConfiguredPropagatesError(t *testing.T) {
 	require.NoError(t, db.NewInstance("sqlite", ":memory:"))
 
-	c, err := NewRelay(&stubSite{}, boolG(false), nil, 1e3, 0, 0, 0)
+	c, err := NewRelay(&testSiteStub{}, boolG(false), nil, 1e3, 0, 0, 0)
 	require.NoError(t, err)
 
 	want := errors.New("limit read error")
@@ -110,6 +110,6 @@ func TestFailsafeNotConfiguredPropagatesError(t *testing.T) {
 }
 
 func TestFailsafeNegativeDurationRejected(t *testing.T) {
-	_, err := NewRelay(&stubSite{}, boolG(false), nil, 1e3, 0, 0, -time.Second)
+	_, err := NewRelay(&testSiteStub{}, boolG(false), nil, 1e3, 0, 0, -time.Second)
 	assert.ErrorContains(t, err, "failsafe duration cannot be negative")
 }

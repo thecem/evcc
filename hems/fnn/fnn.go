@@ -150,6 +150,11 @@ type Fnn struct {
 	productionFailsafeSince   time.Time
 }
 
+type curtailmentState struct {
+	percent int
+	active  bool
+}
+
 func (c *Fnn) SetUpdated(f func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -189,10 +194,7 @@ func (c *Fnn) runCurtail() error {
 		{get: c.s1, percent: 60},
 	}
 
-	states := make([]struct {
-		percent int
-		active  bool
-	}, 0, len(rules))
+	states := make([]curtailmentState, 0, len(rules))
 
 	for _, rule := range rules {
 		if rule.get == nil {
@@ -201,7 +203,7 @@ func (c *Fnn) runCurtail() error {
 
 		active, err := rule.get()
 		if err != nil {
-			if c.failsafeProductionLimit <= 0 {
+			if !c.hasProductionFailsafe() {
 				return err
 			}
 			c.mu.Lock()
@@ -214,10 +216,7 @@ func (c *Fnn) runCurtail() error {
 			return c.setProductionPowerLimit(c.failsafeProductionLimit)
 		}
 
-		states = append(states, struct {
-			percent int
-			active  bool
-		}{
+		states = append(states, curtailmentState{
 			percent: rule.percent,
 			active:  active,
 		})
@@ -260,7 +259,7 @@ func (c *Fnn) runDim() error {
 
 	active, err := c.w4()
 	if err != nil {
-		if c.failsafeConsumptionLimit <= 0 {
+		if !c.hasConsumptionFailsafe() {
 			return err
 		}
 		c.mu.Lock()
@@ -300,24 +299,14 @@ func (c *Fnn) runDim() error {
 // setProductionPercent applies the curtailment limit.
 func (c *Fnn) setProductionPercent(percent int) error {
 	active := percent < 100
-	limit := 0.0
-	if active {
-		limit = float64(percent) / 100 * c.maxCurtailPower
-	}
-
-	return c.setProductionState(percent, limit, active)
+	return c.setProductionState(percent, c.percentToProductionLimit(percent), active)
 }
 
 func (c *Fnn) setProductionPowerLimit(limit float64) error {
 	percent := 100
 	active := limit > 0
 	if active {
-		if c.maxCurtailPower > 0 {
-			percent = int(math.Round(limit / c.maxCurtailPower * 100))
-			percent = max(0, min(100, percent))
-		} else {
-			percent = 0
-		}
+		percent = c.productionLimitToPercent(limit)
 	}
 
 	return c.setProductionState(percent, limit, active)
@@ -338,6 +327,31 @@ func (c *Fnn) setProductionState(percent int, limit float64, active bool) error 
 	}
 
 	return nil
+}
+
+func (c *Fnn) hasConsumptionFailsafe() bool {
+	return c.failsafeConsumptionLimit > 0
+}
+
+func (c *Fnn) hasProductionFailsafe() bool {
+	return c.failsafeProductionLimit > 0
+}
+
+func (c *Fnn) percentToProductionLimit(percent int) float64 {
+	if percent >= 100 {
+		return 0
+	}
+
+	return float64(percent) / 100 * c.maxCurtailPower
+}
+
+func (c *Fnn) productionLimitToPercent(limit float64) int {
+	if c.maxCurtailPower <= 0 {
+		return 0
+	}
+
+	percent := int(math.Round(limit / c.maxCurtailPower * 100))
+	return max(0, min(100, percent))
 }
 
 // setConsumptionLimit applies the dimming limit.
