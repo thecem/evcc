@@ -229,3 +229,17 @@ func TestFailsafeNegativeDurationRejected(t *testing.T) {
 	_, err := NewFnn(&stubSite{}, 1e3, 1e3, nil, nil, nil, boolG(false), 0, 0, 0, -time.Second)
 	assert.ErrorContains(t, err, "failsafe duration cannot be negative")
 }
+
+func TestDecodeRejectsNegativeFailsafeLimits(t *testing.T) {
+	other := map[string]any{
+		"maxDimPower":                         4200,
+		"failsafeConsumptionActivePowerLimit": -1,
+		"w4": map[string]any{
+			"source": "const",
+			"value":  false,
+		},
+	}
+
+	_, err := NewFromConfig(t.Context(), other, &stubSite{})
+	assert.ErrorContains(t, err, "failsafe consumption limit cannot be negative")
+}

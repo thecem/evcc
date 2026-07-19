@@ -41,6 +41,12 @@ func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*F
 	if err := util.DecodeOther(other, &cc); err != nil {
 		return nil, err
 	}
+	if cc.FailsafeConsumptionActivePowerLimit < 0 {
+		return nil, errors.New("failsafe consumption limit cannot be negative")
+	}
+	if cc.FailsafeProductionActivePowerLimit < 0 {
+		return nil, errors.New("failsafe production limit cannot be negative")
+	}
 
 	w3G, err := cc.W3.BoolGetter(ctx)
 	if err != nil {
@@ -78,8 +84,8 @@ func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*F
 		maxCurtailPower,
 		w3G, s1G, s2G, w4G,
 		cc.Interval,
-		math.Abs(cc.FailsafeConsumptionActivePowerLimit),
-		math.Abs(cc.FailsafeProductionActivePowerLimit),
+		cc.FailsafeConsumptionActivePowerLimit,
+		cc.FailsafeProductionActivePowerLimit,
 		cc.FailsafeDurationMinimum,
 	)
 }
@@ -319,7 +325,7 @@ func (c *Fnn) setProductionState(percent int, limit float64, active bool) error 
 	c.productionPercent = percent
 	c.productionLimit = nil
 	if active {
-		c.productionLimit = new(limit)
+		c.productionLimit = &limit
 	}
 
 	if err := smartgrid.UpdateSession(&c.smartgridProductionID, smartgrid.Curtail, c.site.GetGridPower(), limit, active); err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -56,6 +55,9 @@ func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*R
 	if err := util.DecodeOther(other, &cc); err != nil {
 		return nil, err
 	}
+	if cc.FailsafeConsumptionActivePowerLimit < 0 {
+		return nil, errors.New("failsafe consumption limit cannot be negative")
+	}
 
 	// limit getter
 	limitG, err := cc.Limit.BoolGetter(ctx)
@@ -74,7 +76,7 @@ func NewFromConfig(ctx context.Context, other map[string]any, site site.API) (*R
 		passthroughS,
 		cc.MaxPower,
 		cc.Interval,
-		math.Abs(cc.FailsafeConsumptionActivePowerLimit),
+		cc.FailsafeConsumptionActivePowerLimit,
 		cc.FailsafeDurationMinimum,
 	)
 }
